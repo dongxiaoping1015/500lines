@@ -103,3 +103,53 @@ class Templite:
                 if token:
                     # 使用内置的repr函数来产生一个python字符串字面量
                     buffered.append(repr(token))
+            # 如果ops_stack不为空，则漏掉了结束标签
+            if ops_stack:
+                self._syntax_error("Unmatched action tag", ops_stack[-1])
+            # 刷新缓冲队列输出到函数源码
+            flush_output()
+            # 解包任何属于all_vars而不属于loop_vars的名称
+            for var_name in self.all_vars - self.loop_vars:
+                vars_code.add_line("c_%s = context[%r]" % (var_name, var_name))
+            # 组合字符串并返回
+            code.add_line("return ''.join(result)")
+            code.dedent()
+            # get_globals的结果是代码中定义的值的字典。我们从中获取render_function的值，
+            # 然后将它保存为Templite对象的一个属性
+            self._render_function = code.get_globals()['render_function']
+            # _expr_code方法处理模板中的简单名字或复杂的序列（包含属性访问和过滤器）
+                def _expr_code(self, expr):
+                    """Generate a Python expression for 'expr'."""
+                    # 当表达式中有管道分隔符时，分割它为一个管道片段列表
+                    if "|" in expr:
+                        pipes = expr.split("|")
+                        code = self._expr_code(pipes[0])
+                        for func in pipes[1:]:
+                            self._variable(func, self.all_vars)
+                            code = "c_%s(%s)" % (func, code)
+                    # 余下的每一个管道片段都是一个函数名。值被传递给这些函数来产生最终的值。
+                    # 每一个函数名都是一个变量，要加入到all_vars中使我们能在序幕中正确的提取它
+                    # 如果没有管道，可能会有点操作符。如有，按点分割。
+                    elif "." in expr:
+                        dots = expr.split(".")
+                        code = self._expr_code(dots[0])
+                        args = ", ".join(repr(d) for d in dots[1:])
+                        code = "do_dots(%s, %s)" % (code, args)
+                    # 处理没有管道和点操作符的情况。这时，表达式仅仅是一个名称。
+                    else:
+                        self._variable(expr, self.all_vars)
+                        code = "c_%s" % expr
+                    return code
+
+                def _syntax_error(self, msg, thing):
+                    """Raise a syntax error using 'msg', and showing 'thing'."""
+                    raise TempliteSyntaxError("%s: %r" % (msgm thing))
+
+                def _variable(self, name, vars_set):
+                    """Track that 'name' is used as a variable.
+                    Adds the name to 'vars_set', a set of variable names.
+                    Raises an syntax error if 'name' is not a valid name.
+                    """
+                    if not re.match(r"[_a-zA-Z][_a-zA-Z0-9]*$", name):
+                        self._syntax_error("Not a valid name", name)
+                    vars_set.add(name)
